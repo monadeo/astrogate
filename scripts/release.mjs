@@ -59,7 +59,7 @@ try {
     run(`npm version ${next} --no-git-tag-version --allow-same-version`, { cwd: dir });
   }
   run(`git add ${manifests.join(" ")}`);
-  run(`git commit -m "${tag}"`);
+  run(`git commit -m "Release ${tag}"`);
   // Annotated tag: `git push --follow-tags` only pushes annotated tags, and the
   // tag push is what triggers the release workflow.
   run(`git tag -a ${tag} -m ${tag}`);

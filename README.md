@@ -1,13 +1,12 @@
 # Astrogate
 
-Event-driven orchestration of Pi coding sessions in herdr, driven by a GitHub
-Project board. A deterministic controller receives GitHub webhooks, applies
-policy, starts and monitors Pi sessions in herdr panes, and writes results back
-to GitHub. Judgment stays with model sessions: a foreman for triage and
-exceptions, workers for tickets, a reviewer for pull requests.
+Orchestrates [Pi](https://pi.dev) coding sessions in [herdr](https://herdr.dev)
+from a GitHub Project board. You write tickets; a controller routes them,
+starts a Pi session per ticket in its own worktree, runs review, deploys through
+your GitHub Actions workflows, and asks you on Discord when a decision or an
+acceptance is needed. Only the controller talks to GitHub.
 
-Status: design complete, implementation starting. Nothing is installed or
-tested yet.
+Status: early development. Nothing beyond `astrogate version` works yet.
 
 ## Install
 
@@ -15,18 +14,7 @@ tested yet.
 brew install monadeo/tap/astrogate
 ```
 
-Requires [herdr](https://herdr.dev) and [Pi](https://pi.dev) installed
-separately.
-
-## Develop
-
-```
-pnpm install
-pnpm check
-pnpm build
-```
-
-Releases: `pnpm release:patch|minor|major`. See `AGENTS.md`.
+Requires herdr and Pi installed separately.
 
 ## License
 

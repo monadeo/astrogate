@@ -23,6 +23,7 @@
   "type": "module",
   "description": "Astrogate companion: Pi extension that connects a session to the Astrogate controller",
   "devDependencies": {
+    "@earendil-works/pi-ai": "^0.85.1",
     "@earendil-works/pi-coding-agent": "^0.85.1",
     "@monadeo.com/astrogate-protocol": "workspace:*",
     "@types/node": "^26.5.1",

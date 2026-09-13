@@ -2,3 +2,6 @@ packages:
   - "packages/*"
 allowBuilds:
   esbuild: true
+  # Pulled in by @earendil-works/pi-coding-agent, which we use for types only.
+  "@google/genai": false
+  protobufjs: false

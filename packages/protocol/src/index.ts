@@ -11,6 +11,7 @@ export interface SessionRegistration {
   role: Role;
   paneId: string;
   sessionFile: string;
+  repo?: string;
   ticket?: number;
   attempt?: number;
 }

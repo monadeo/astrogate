@@ -70,12 +70,18 @@ export function writeAppSecrets(paths: Paths, conversion: Conversion): void {
 export function writeInitialConfig(paths: Paths, org: string, appId: number, appSlug: string, listenPort: number, webhookPath: string): void {
   if (existsSync(paths.config)) return;
   const config = {
-    github: { org, appId, appSlug, installationId: 0 },
+    github: { org, owner: "", appId, appSlug, installationId: 0, projectNumber: 0 },
     listen: { host: "127.0.0.1", port: listenPort, path: webhookPath },
     projects: [],
     concurrency: { workers: 2 },
     attemptCap: 3,
-    worker: { worktreesDir: "" },
+    reminders: { afterMinutes: 240 },
+    worker: { reposDir: "", worktreesDir: "" },
+    models: {
+      foreman: { model: "gpt-5.6-sol", thinking: "high" },
+      worker: { model: "gpt-5.6-terra", thinking: "medium" },
+      reviewer: { model: "gpt-5.6-sol", thinking: "high" },
+    },
   };
   writeFileSync(paths.config, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
 }

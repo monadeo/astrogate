@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { exchangeManifestCode, manifestFormHtml, writeAppSecrets, writeInitialConfig } from "./commands/init.js";
 import { serve } from "./commands/serve.js";
+import { status } from "./commands/status.js";
 import { ConfigError } from "./config.js";
 import { helpText } from "./help.js";
 import { resolvePaths } from "./paths.js";
@@ -60,6 +61,9 @@ async function main(argv: string[]): Promise<void> {
       return;
     case "serve":
       await serve(resolvePaths());
+      return;
+    case "status":
+      status(resolvePaths());
       return;
     default:
       console.error(`Unknown command: ${command}\n`);

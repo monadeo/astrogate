@@ -10,6 +10,7 @@ import type {
 } from "@monadeo.com/astrogate-protocol";
 import { Type } from "typebox";
 import { StringEnum } from "@earendil-works/pi-ai";
+import { rolePrompt } from "./prompts.js";
 
 /**
  * Astrogate companion. The controller launches Pi in a herdr pane with
@@ -37,6 +38,8 @@ function readInt(name: string): number | undefined {
 }
 
 class Link {
+  onDisconnect: ((ctx: ExtensionContext) => void) | undefined;
+  context: ExtensionContext | undefined;
   #socket: Socket | undefined;
   #buffer = "";
   readonly #pending = new Map<string, (result: HandlerResult) => void>();
@@ -61,9 +64,11 @@ class Link {
       socket.once("error", reject);
       socket.on("data", (chunk: string) => this.#read(chunk));
       socket.on("close", () => {
+        const wasConnected = this.#socket !== undefined;
         this.#socket = undefined;
         for (const resolvePending of this.#pending.values()) resolvePending({ ok: false, reason: "controller connection closed" });
         this.#pending.clear();
+        if (wasConnected && this.context) this.onDisconnect?.(this.context);
       });
     });
   }
@@ -151,27 +156,44 @@ export default function astrogateCompanion(pi: ExtensionAPI): void {
     link.send({ kind: "state", state, ...(message ? { message } : {}) });
   };
 
-  pi.on("session_start", async (_event, ctx: ExtensionContext) => {
-    if (link.connected) return;
-    try {
-      await link.open();
-    } catch (error) {
-      ctx.ui.notify(`Astrogate: cannot reach controller at ${socketPath}: ${String(error)}`, "error");
-      return;
-    }
-    const sessionFile = ctx.sessionManager.getSessionFile();
+  let sessionFile = "";
+  const register = (): void => {
     link.send({
       kind: "register",
       registration: {
         role,
         paneId: process.env["HERDR_PANE_ID"] ?? "",
-        sessionFile: sessionFile ?? "",
+        sessionFile,
+        repo: process.env["ASTROGATE_REPO"],
         ticket: readInt("ASTROGATE_TICKET"),
         attempt: readInt("ASTROGATE_ATTEMPT"),
       },
     });
-    ctx.ui.notify("Astrogate: connected to controller", "info");
+    lastState = undefined;
+  };
+  // The controller may restart while a session lives on; keep trying until it is back.
+  const connectLoop = async (ctx: ExtensionContext): Promise<void> => {
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        await link.open();
+        register();
+        ctx.ui.notify("Astrogate: connected to controller", "info");
+        return;
+      } catch {
+        if (attempt === 0) ctx.ui.notify(`Astrogate: controller not reachable at ${socketPath}, retrying`, "warning");
+        await new Promise((resolve) => setTimeout(resolve, 5000));
+      }
+    }
+  };
+  link.onDisconnect = (ctx) => void connectLoop(ctx);
+
+  pi.on("session_start", async (_event, ctx: ExtensionContext) => {
+    sessionFile = ctx.sessionManager.getSessionFile() ?? "";
+    link.context = ctx;
+    if (!link.connected) await connectLoop(ctx);
   });
+
+  pi.on("before_agent_start", async (event) => ({ systemPrompt: `${event.systemPrompt}\n\n${rolePrompt(role)}` }));
 
   pi.on("agent_start", async () => report("working"));
   pi.on("agent_settled", async () => report("idle"));

@@ -5,8 +5,8 @@ Project board. pnpm workspace, TypeScript strict ESM, Node 24. Three packages:
 `protocol` (shared types), `controller` (the `astrogate` command and service),
 `companion` (the Pi extension).
 
-The design is `docs/astro-orchestration.md` plus the four diagrams in
-`docs/diagrams/`. They are the authority. When code and design disagree, fix
+The design document and diagrams are private and kept outside version control
+(`docs/` is ignored). They are the authority. When code and design disagree, fix
 both in the same change.
 
 ## Commands
@@ -20,8 +20,8 @@ both in the same change.
 
 ## Rules
 
-**This repository is public.** No host names, credentials, internal
-procedures, or personal infrastructure in code, docs, or this file.
+**This repository is public.** No credentials, addresses, or internal
+procedures in code or in this file. Design notes stay in the ignored `docs/`.
 
 **No workarounds.** No `any`, no `eslint-disable`, no rule overrides, no casts
 to silence the compiler. If the clean fix is out of reach, say so and stop.

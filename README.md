@@ -9,12 +9,6 @@ exceptions, workers for tickets, a reviewer for pull requests.
 Status: design complete, implementation starting. Nothing is installed or
 tested yet.
 
-## Design
-
-- `docs/astro-orchestration.md` — the design.
-- `docs/diagrams/` — four Excalidraw diagrams: high level, controller and
-  worker side, ticket flow, controller ↔ session protocol.
-
 ## Install
 
 ```

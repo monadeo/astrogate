@@ -77,6 +77,13 @@ function num(obj: Record<string, unknown>, key: string, where: string): number {
   return v;
 }
 
+/** Zero means "not set yet"; commands that need the value check for it themselves. */
+function numOrZero(obj: Record<string, unknown>, key: string, where: string): number {
+  const v = obj[key];
+  if (typeof v !== "number" || !Number.isInteger(v) || v < 0) throw new ConfigError(`${where}.${key} must be a non-negative integer`);
+  return v;
+}
+
 function section(obj: Record<string, unknown>, key: string): Record<string, unknown> {
   const v = obj[key];
   if (!isRecord(v)) throw new ConfigError(`${key} must be an object`);
@@ -166,8 +173,8 @@ export function parseConfig(raw: unknown): Config {
       owner: str(github, "owner", "github"),
       appId: num(github, "appId", "github"),
       appSlug: str(github, "appSlug", "github"),
-      installationId: num(github, "installationId", "github"),
-      projectNumber: num(github, "projectNumber", "github"),
+      installationId: numOrZero(github, "installationId", "github"),
+      projectNumber: numOrZero(github, "projectNumber", "github"),
     },
     listen: { host: str(listen, "host", "listen"), port: num(listen, "port", "listen"), path: str(listen, "path", "listen") },
     defaults,

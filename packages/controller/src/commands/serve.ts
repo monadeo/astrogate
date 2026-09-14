@@ -1,4 +1,4 @@
-import { loadConfig, loadSecrets } from "../config.js";
+import { ConfigError, loadConfig, loadSecrets } from "../config.js";
 import { DiscordNotifier } from "../discord/notifier.js";
 import { Engine } from "../flow/engine.js";
 import { GitHubApp } from "../github/client.js";
@@ -18,6 +18,8 @@ function report(scope: string): (error: unknown) => void {
 
 export async function serve(paths: Paths): Promise<void> {
   const config = loadConfig(paths);
+  if (config.github.installationId === 0) throw new ConfigError("github.installationId is not set; install the App and set it");
+  if (config.github.projectNumber === 0) throw new ConfigError("github.projectNumber is not set; run `astrogate init board`");
   const secrets = loadSecrets(paths);
   const db = new StateDb(paths.stateDb);
   const github = new GitHubApp(config.github.appId, secrets.appPrivateKey, config.github.installationId);

@@ -158,6 +158,36 @@ export class RepoApi {
       .then(() => undefined);
   }
 
+  assign(repo: string, number: number, login: string): Promise<void> {
+    return this.#github.request<unknown>("POST", `/repos/${repo}/issues/${number}/assignees`, { assignees: [login] }).then(() => undefined);
+  }
+
+  unassign(repo: string, number: number, login: string): Promise<void> {
+    return this.#github.request<unknown>("DELETE", `/repos/${repo}/issues/${number}/assignees`, { assignees: [login] }).then(() => undefined);
+  }
+
+  closeIssue(repo: string, number: number): Promise<void> {
+    return this.#github.request<unknown>("PATCH", `/repos/${repo}/issues/${number}`, { state: "closed", state_reason: "completed" }).then(() => undefined);
+  }
+
+  async fileExists(repo: string, path: string, ref: string): Promise<boolean> {
+    try {
+      await this.#github.request<unknown>("GET", `/repos/${repo}/contents/${path}?ref=${encodeURIComponent(ref)}`);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async userExists(login: string): Promise<boolean> {
+    try {
+      await this.#github.request<unknown>("GET", `/users/${encodeURIComponent(login)}`);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   createTag(repo: string, tag: string, sha: string): Promise<void> {
     return this.#github.request<unknown>("POST", `/repos/${repo}/git/refs`, { ref: `refs/tags/${tag}`, sha }).then(() => undefined);
   }

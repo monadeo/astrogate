@@ -18,14 +18,17 @@ export type DeployStrategy = "tags" | "dispatch";
 
 export interface RepoConfig {
   repo: string;
+  /** GitHub login assigned when a ticket needs information; falls back to github.owner. */
+  owner: string;
   tier: Tier;
-  checkScript: string;
+  /** null skips the check step. */
+  checkScript: string | null;
   deploy: { strategy: DeployStrategy; qa?: DeployTarget; production: DeployTarget; qaUrl?: string };
 }
 
 export interface RepoDefaults {
   tier: Tier;
-  checkScript: string;
+  checkScript: string | null;
   deploy: { strategy: DeployStrategy; qa?: DeployTarget; production: DeployTarget };
 }
 
@@ -120,7 +123,7 @@ function parseDefaults(raw: Record<string, unknown>): RepoDefaults {
   const qa = deploy["qa"];
   return {
     tier: parseTier(defaults["tier"], "defaults.tier"),
-    checkScript: str(defaults, "checkScript", "defaults"),
+    checkScript: defaults["checkScript"] === null ? null : str(defaults, "checkScript", "defaults"),
     deploy: {
       strategy: parseStrategy(deploy["strategy"], "defaults.deploy.strategy"),
       production: parseTarget(deploy["production"], "defaults.deploy.production"),
@@ -129,20 +132,21 @@ function parseDefaults(raw: Record<string, unknown>): RepoDefaults {
   };
 }
 
-function parseRepo(value: unknown, index: number, defaults: RepoDefaults): RepoConfig {
+function parseRepo(value: unknown, index: number, defaults: RepoDefaults, defaultOwner: string): RepoConfig {
   const where = `repos[${index}]`;
   if (!isRecord(value)) throw new ConfigError(`${where} must be an object`);
   const repo = str(value, "repo", where);
   if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) throw new ConfigError(`${where}.repo must be owner/name`);
+  const owner = value["owner"] === undefined ? defaultOwner : str(value, "owner", where);
   const tier = value["tier"] === undefined ? defaults.tier : parseTier(value["tier"], `${where}.tier`);
-  const checkScript = value["checkScript"] === undefined ? defaults.checkScript : str(value, "checkScript", where);
+  const checkScript = value["checkScript"] === undefined ? defaults.checkScript : value["checkScript"] === null ? null : str(value, "checkScript", where);
   const deployRaw = value["deploy"] === undefined ? {} : section(value, "deploy");
   const production = deployRaw["production"] === undefined ? defaults.deploy.production : parseTarget(deployRaw["production"], `${where}.deploy.production`);
   const qa = deployRaw["qa"] === undefined ? defaults.deploy.qa : parseTarget(deployRaw["qa"], `${where}.deploy.qa`);
   const qaUrl = optStr(deployRaw, "qaUrl", `${where}.deploy`);
   const strategy = deployRaw["strategy"] === undefined ? defaults.deploy.strategy : parseStrategy(deployRaw["strategy"], `${where}.deploy.strategy`);
   if (tier === "critical" && qa === undefined) throw new ConfigError(`${where}: critical repos need a QA deploy workflow (repo or defaults)`);
-  return { repo, tier, checkScript, deploy: { strategy, production, ...(qa ? { qa } : {}), ...(qaUrl ? { qaUrl } : {}) } };
+  return { repo, owner, tier, checkScript, deploy: { strategy, production, ...(qa ? { qa } : {}), ...(qaUrl ? { qaUrl } : {}) } };
 }
 
 function parseModels(raw: Record<string, unknown>): Config["models"] {
@@ -167,6 +171,7 @@ export function parseConfig(raw: unknown): Config {
   const repos = raw["repos"];
   if (!Array.isArray(repos)) throw new ConfigError("repos must be an array");
   const defaults = parseDefaults(raw);
+  const owner = str(github, "owner", "github");
   return {
     github: {
       org: str(github, "org", "github"),
@@ -178,7 +183,7 @@ export function parseConfig(raw: unknown): Config {
     },
     listen: { host: str(listen, "host", "listen"), port: num(listen, "port", "listen"), path: str(listen, "path", "listen") },
     defaults,
-    repos: repos.map((r, i) => parseRepo(r, i, defaults)),
+    repos: repos.map((r, i) => parseRepo(r, i, defaults, owner)),
     concurrency: { workers: num(concurrency, "workers", "concurrency") },
     attemptCap: num(raw, "attemptCap", "config"),
     reminders: { afterMinutes: num(reminders, "afterMinutes", "reminders") },

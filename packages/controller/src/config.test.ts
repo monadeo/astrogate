@@ -20,7 +20,7 @@ const valid = {
 describe("parseConfig", () => {
   it("fills repos from defaults and keeps overrides", () => {
     const config = parseConfig(valid);
-    expect(config.repos[0]).toEqual({ repo: "acme/app", tier: "critical", checkScript: "pnpm check", deploy: { strategy: "tags", qa: { workflow: "deploy-qa.yml", inputs: {} }, production: { workflow: "deploy-live.yml", inputs: { tag: "{tag}" } } } });
+    expect(config.repos[0]).toEqual({ repo: "acme/app", owner: "astro", tier: "critical", checkScript: "pnpm check", deploy: { strategy: "tags", qa: { workflow: "deploy-qa.yml", inputs: {} }, production: { workflow: "deploy-live.yml", inputs: { tag: "{tag}" } } } });
     expect(config.repos[1].tier).toBe("non-critical");
     expect(config.repos[1].checkScript).toBe("npm test");
   });

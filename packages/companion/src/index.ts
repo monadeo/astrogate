@@ -139,7 +139,7 @@ export default function astrogateCompanion(pi: ExtensionAPI): void {
       pi.sendUserMessage(
         [
           `Ticket #${e.ticket} in ${e.repo}, attempt ${e.attempt}. Branch ${e.branch}, worktree ${e.worktree}.`,
-          `Checks that must pass before submit: ${e.checks.join(", ")}.`,
+          e.checks.length > 0 ? `Checks that must pass before submit: ${e.checks.join(", ")}.` : "No check script is configured yet; verify your work by hand before submit.",
           "",
           e.brief,
         ].join("\n"),

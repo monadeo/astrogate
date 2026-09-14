@@ -1,5 +1,5 @@
 import type { GitHubApp } from "./client.js";
-import { ALL_STATUSES, isStatus, type Status } from "../flow/status.js";
+import { ALL_STATUSES, LEGACY_STATUS_NAMES, isStatus, type Status } from "../flow/status.js";
 
 const STATUS_COLORS: Record<Status, string> = {
   Inbox: "GRAY",
@@ -9,7 +9,7 @@ const STATUS_COLORS: Record<Status, string> = {
   QA: "PURPLE",
   "Ready for acceptance": "PINK",
   Done: "GREEN",
-  "Needs Astro": "RED",
+  "Needs Info": "RED",
   Blocked: "RED",
 };
 
@@ -58,13 +58,17 @@ export async function ensureBoard(github: GitHubApp, org: string, title: string,
   }
   if (!board.field) throw new Error(`Project ${board.number} has no single-select "Status" field`);
 
-  const byName = new Map(board.field.options.map((o) => [o.name, o.id]));
+  const byName = new Map(board.field.options.map((o) => [LEGACY_STATUS_NAMES[o.name] ?? o.name, o.id]));
   const ordered = ALL_STATUSES.map((name) => {
     const id = byName.get(name);
     return { ...(id ? { id } : {}), name, color: STATUS_COLORS[name], description: "" };
   });
   // Foreign options are dropped on a fresh board; on an adopted board they stay so no item loses its value.
-  const foreign = created ? [] : board.field.options.filter((o) => !ALL_STATUSES.includes(o.name as Status)).map((o) => ({ id: o.id, name: o.name, color: "GRAY", description: "" }));
+  const foreign = created
+    ? []
+    : board.field.options
+        .filter((o) => !ALL_STATUSES.includes(o.name as Status) && !(o.name in LEGACY_STATUS_NAMES))
+        .map((o) => ({ id: o.id, name: o.name, color: "GRAY", description: "" }));
   const current = board.field.options.map((o) => o.name).join("|");
   if (current !== [...ordered, ...foreign].map((o) => o.name).join("|")) {
     await github.graphql(
@@ -144,9 +148,7 @@ export class ProjectBoard {
     this.#projectId = project.id;
     this.#statusFieldId = project.field.id;
     this.#options = new Map(project.field.options.map((o) => [o.name, o.id]));
-    const missing = ["Inbox", "Ready", "In progress", "Review", "QA", "Ready for acceptance", "Done", "Needs Astro", "Blocked"].filter(
-      (name) => !this.#options.has(name),
-    );
+    const missing = ALL_STATUSES.filter((name) => !this.#options.has(name));
     if (missing.length > 0) throw new Error(`Status field lacks options: ${missing.join(", ")}`);
   }
 

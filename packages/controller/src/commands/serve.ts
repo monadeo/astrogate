@@ -2,7 +2,7 @@ import { ConfigError, loadConfig, loadSecrets } from "../config.js";
 import { DiscordNotifier } from "../discord/notifier.js";
 import { Engine } from "../flow/engine.js";
 import { GitHubApp } from "../github/client.js";
-import { ProjectBoard } from "../github/projects.js";
+import { ProjectBoard, ensureBoard } from "../github/projects.js";
 import { RepoApi } from "../github/repo.js";
 import { log } from "../log.js";
 import type { Paths } from "../paths.js";
@@ -28,6 +28,8 @@ export async function serve(paths: Paths): Promise<void> {
   const discord = new DiscordNotifier(secrets.discordWebhookUrl);
 
   const app = await github.request<{ slug: string }>("GET", "/app", undefined, github.appJwt());
+  // Idempotent: renames legacy options and restores missing ones before the board is read.
+  await ensureBoard(github, config.github.org, "AstroGate", config.github.projectNumber);
   await board.load();
   log("serve", `authenticated as GitHub App ${app.slug}`, { board: board.url, repos: config.repos.map((p) => p.repo) });
 
@@ -38,7 +40,7 @@ export async function serve(paths: Paths): Promise<void> {
     onClose: (session) => void holder.engine?.onClose(session).catch(report("session")),
   });
   await sessions.listen();
-  const live = new Engine({ config, db, github, repos, board, sessions, discord, socketPath: paths.socket });
+  const live = new Engine({ config, configPath: paths.config, db, github, repos, board, sessions, discord, socketPath: paths.socket });
   holder.engine = live;
 
   const webhook = startWebhookServer({

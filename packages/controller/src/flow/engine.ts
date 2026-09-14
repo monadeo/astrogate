@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { HandlerResult, Role, SessionMessage, TaskEnvelope, ToolCall } from "@monadeo.com/astrogate-protocol";
 import { findRepo, type Config, type RepoConfig } from "../config.js";
@@ -20,12 +20,14 @@ import { highestLevel, levelFromLabels, nextCandidate, nextFinal, type ReleaseLe
 import { STATUS, type Status } from "./status.js";
 
 const BRIEF_MARKER = "<!-- astrogate:brief -->";
+const SETUP_MARKER = "<!-- astrogate:setup -->";
 const REVIEW_CHECK = "astrogate/review";
 const RELEASE_BRANCH = "astrogate/release";
 const REGISTRATION_TIMEOUT_MS = 3 * 60_000;
 
 export interface EngineDeps {
   config: Config;
+  configPath: string;
   db: StateDb;
   github: GitHubApp;
   repos: RepoApi;
@@ -75,10 +77,13 @@ export class Engine {
         return;
       }
       case "issue_comment": {
-        if (!this.#project(parsed.repo) || parsed.sender !== this.#d.config.github.owner) return;
+        const project = this.#project(parsed.repo);
+        if (!project || parsed.sender !== project.owner) return;
         const item = await this.#d.board.itemForIssue(parsed.issueNodeId);
         if (!item) return;
-        if (item.status === STATUS.needsAstro) await this.#onAnswer(item, parsed.body);
+        const issue = await this.#d.repos.issue(item.repo, item.number);
+        if (issue.body.includes(SETUP_MARKER)) await this.#onSetupReply(project, item, parsed.body);
+        else if (item.status === STATUS.needsInfo) await this.#onAnswer(item, parsed.body);
         else if (item.status === STATUS.readyForAcceptance && parsed.body.trim().startsWith("/reject")) await this.#onReject(item, parsed.body);
         return;
       }
@@ -87,7 +92,7 @@ export class Engine {
         if (!item || !this.#project(item.repo)) return;
         if (item.status === STATUS.inbox) await this.startForeman(item.repo, item.number, "triage");
         else if (item.status === STATUS.ready) await this.fillSlots();
-        else if (item.status === STATUS.done && parsed.sender === this.#d.config.github.owner) await this.#onAccepted(item);
+        else if (item.status === STATUS.done && parsed.sender === this.#project(item.repo)?.owner) await this.#onAccepted(item);
         return;
       }
       case "check_suite_completed": {
@@ -173,7 +178,7 @@ export class Engine {
   async tick(): Promise<void> {
     await this.fillSlots();
     const windowMs = this.#d.config.reminders.afterMinutes * 60_000;
-    for (const status of [STATUS.needsAstro, STATUS.readyForAcceptance] as Status[]) {
+    for (const status of [STATUS.needsInfo, STATUS.readyForAcceptance] as Status[]) {
       for (const item of await this.#d.board.itemsWithStatus(status)) {
         if (this.#d.db.shouldAlert(`reminder:${item.repo}#${item.number}`, windowMs)) {
           await this.#alert(`Reminder: ${item.repo}#${item.number} is still in ${status}. ${this.#issueUrl(item)} · ${this.#d.board.url}`);
@@ -188,27 +193,55 @@ export class Engine {
    */
   async bootstrapRepos(): Promise<void> {
     for (const project of this.#d.config.repos) {
-      if (!(await this.#d.repos.isEmpty(project.repo))) continue;
-      const title = `Bootstrap ${project.repo}`;
-      await this.#d.repos.createFile(project.repo, "README.md", `# ${project.repo.split("/")[1]}\n`, "Initialize repository");
+      const title = `Set up Astrogate for ${project.repo}`;
+      if (await this.#d.repos.isEmpty(project.repo)) {
+        await this.#d.repos.createFile(project.repo, "README.md", `# ${project.repo.split("/")[1]}\n`, "Initialize repository");
+      }
+      if (this.#d.db.shouldAlert(`setup:${project.repo}`, Number.MAX_SAFE_INTEGER) === false) continue;
       if ((await this.#d.repos.openIssuesTitled(project.repo, title)).length > 0) continue;
       const body = [
-        "This repository was empty. Astrogate created the first commit (README only) so branches and worktrees can exist.",
+        SETUP_MARKER,
+        `Astrogate now manages this repository. Tickets that need a human decision are assigned to **@${project.owner}** and go to *Needs Info*.`,
         "",
-        "Decide the baseline before the first feature ticket. Astrogate needs, on the default branch:",
-        `- a \`package.json\` with a version and the check script (\`${project.checkScript}\`)`,
-        project.deploy.qa ? `- \`.github/workflows/${project.deploy.qa.workflow}\` deploying to QA on a \`v*\` tag push (release candidates are tagged \`vX.Y.Z-rc.N\`)` : "",
-        `- \`.github/workflows/${project.deploy.production.workflow}\` deploying to production, dispatched with the final tag as input \`tag\``,
+        "Reply `confirm` to keep that, or reply with `@username` to hand the role to someone else.",
         "",
-        "Reply with what this project is and which stack, tooling, and hosting it uses, or say \"default\" for a minimal Node/pnpm baseline with those files. The foreman will turn your answer into a brief and a worker will build it.",
-      ]
-        .filter((line) => line.length > 0)
-        .join("\n");
+        "Tech stack, check script, and deployment workflows are decided in their own tickets; nothing else is required now.",
+      ].join("\n");
       const issue = await this.#d.repos.createIssue(project.repo, title, body);
       const item = (await this.#d.board.itemForIssue(issue.nodeId)) ?? (await this.#addToBoard(issue.nodeId));
-      await this.#setStatus(item, STATUS.needsAstro);
-      await this.#alert(`${project.repo} is empty. Decide its baseline on ${issue.htmlUrl}`);
+      await this.#setStatus(item, STATUS.needsInfo);
+      await this.#alert(`${project.repo} joined Astrogate. Confirm its owner on ${issue.htmlUrl}`);
     }
+  }
+
+  /** The owner confirms or hands over the owner role; deterministic, no model involved. */
+  async #onSetupReply(project: RepoConfig, item: BoardItem, body: string): Promise<void> {
+    const text = body.trim();
+    const handle = /@([A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?)/.exec(text)?.[1];
+    if (handle && handle.toLowerCase() !== project.owner.toLowerCase()) {
+      if (!(await this.#d.repos.userExists(handle))) {
+        await this.#d.repos.comment(item.repo, item.number, `GitHub has no user named @${handle}. Reply with a valid username or \`confirm\`.`);
+        return;
+      }
+      this.#setOwner(project, handle);
+      await this.#d.repos.comment(item.repo, item.number, `Owner for ${project.repo} is now @${handle}.`);
+    } else if (/^(confirm|ok|yes|keep)\b/i.test(text) || (handle && handle.toLowerCase() === project.owner.toLowerCase())) {
+      await this.#d.repos.comment(item.repo, item.number, `Owner confirmed: @${project.owner}.`);
+    } else {
+      await this.#d.repos.comment(item.repo, item.number, "Reply `confirm`, or `@username` to name another owner.");
+      return;
+    }
+    await this.#setStatus(item, STATUS.done);
+    await this.#d.repos.closeIssue(item.repo, item.number);
+  }
+
+  /** Persists a per-repo owner in config.json and in memory. */
+  #setOwner(project: RepoConfig, owner: string): void {
+    project.owner = owner;
+    const raw = JSON.parse(readFileSync(this.#d.configPath, "utf8")) as { repos: { repo: string; owner?: string }[] };
+    const entry = raw.repos.find((r) => r.repo.toLowerCase() === project.repo.toLowerCase());
+    if (entry) entry.owner = owner;
+    writeFileSync(this.#d.configPath, `${JSON.stringify(raw, null, 2)}\n`, { mode: 0o600 });
   }
 
   /** After a controller restart: drop rows whose panes are gone, relaunch workers that were mid-ticket. */
@@ -305,7 +338,7 @@ export class Engine {
   }
 
   #envelope(project: RepoConfig, ticket: number, attempt: number, branch: string, worktree: string, brief: string): TaskEnvelope {
-    return { ticket, attempt, repo: project.repo, branch, worktree, brief, checks: [project.checkScript] };
+    return { ticket, attempt, repo: project.repo, branch, worktree, brief, checks: project.checkScript === null ? [] : [project.checkScript] };
   }
 
   #awaitRegistration(row: AttemptRow): Promise<LiveSession> {
@@ -359,7 +392,7 @@ export class Engine {
         return this.#submit(row, item, call.summary);
       case "ask_astro":
         await this.#d.repos.comment(item.repo, item.number, `**Question from the ${r.role}:**\n\n${call.question}`);
-        await this.#setStatus(item, STATUS.needsAstro);
+        await this.#setStatus(item, STATUS.needsInfo);
         await this.#alert(`Decision needed on ${item.repo}#${item.number}: ${call.question.slice(0, 300)}\n${this.#issueUrl(item)} · ${this.#d.board.url}`);
         if (r.role === "foreman") await this.#stop(row);
         return { ok: true, message: "Question posted. The answer arrives here as a new message; wait for it." };
@@ -380,10 +413,10 @@ export class Engine {
           return { ok: true, message: "Brief posted, ticket is Ready. This session stops now." };
         }
         await this.#d.repos.comment(item.repo, item.number, `**Question from the foreman:**\n\n${call.question}`);
-        await this.#setStatus(item, STATUS.needsAstro);
+        await this.#setStatus(item, STATUS.needsInfo);
         await this.#alert(`Decision needed on ${item.repo}#${item.number}: ${call.question.slice(0, 300)}\n${this.#issueUrl(item)} · ${this.#d.board.url}`);
         await this.#stop(row);
-        return { ok: true, message: "Question posted, ticket is in Needs Astro. This session stops now." };
+        return { ok: true, message: "Question posted, ticket is in Needs Info. This session stops now." };
       case "create_ticket": {
         const issue = await this.#d.repos.createIssue(item.repo, call.title, `${call.body}\n\nSplit from #${item.number}.`);
         return { ok: true, message: `Created #${issue.number}: ${issue.htmlUrl}` };
@@ -402,12 +435,14 @@ export class Engine {
     const files = await changedFiles(wt, base);
     const workflowFiles = files.filter((f) => f.startsWith(".github/workflows/"));
     if (workflowFiles.length > 0) return { ok: false, reason: `Changes under .github/workflows are not allowed: ${workflowFiles.join(", ")}. Revert them.` };
-    const check = await runCheck(wt, project.checkScript);
-    if (!check.ok) return { ok: false, reason: `Check script failed. Fix and submit again.\n\n${check.output.slice(-6000)}` };
+    if (project.checkScript !== null && existsSync(join(wt, "package.json"))) {
+      const check = await runCheck(wt, project.checkScript);
+      if (!check.ok) return { ok: false, reason: `Check script failed. Fix and submit again.\n\n${check.output.slice(-6000)}` };
+    }
     const token = await this.#d.github.installationToken({ repositories: [item.repo.split("/")[1] ?? ""], permissions: { contents: "write" } });
     await push(wt, row.branch, token);
     const sha = await headSha(wt);
-    const prBase = project.tier === "critical" ? await this.#ensureReleaseBranch(project, defaultBranch) : defaultBranch;
+    const prBase = project.tier === "critical" && (await this.#deployReady(project, defaultBranch)) ? await this.#ensureReleaseBranch(project, defaultBranch) : defaultBranch;
     const existing = await this.#d.repos.openPulls(item.repo, row.branch);
     const issue = await this.#d.repos.issue(item.repo, item.number);
     const pr = existing[0] ?? (await this.#d.repos.createPull(item.repo, issue.title, `Ticket #${item.number}\n\n${summary}`, row.branch, prBase));
@@ -452,6 +487,11 @@ export class Engine {
     await this.#d.repos.mergePull(worker.repo, worker.pr, worker.headSha);
     await this.#stop(worker);
     const defaultBranch = await this.#defaultBranch(project);
+    if (!(await this.#deployReady(project, defaultBranch)) || pr.baseRef === defaultBranch && project.tier === "critical") {
+      await this.#setStatus(item, STATUS.readyForAcceptance);
+      await this.#alert(`${item.repo}#${item.number} merged into ${defaultBranch}; no deploy workflow yet, awaiting your acceptance.\n${this.#issueUrl(item)} · ${this.#d.board.url}`);
+      return;
+    }
     if (project.tier === "critical" && project.deploy.qa) {
       this.#d.db.setMember(worker.repo, worker.ticket, "qa");
       await this.#setStatus(item, STATUS.qa);
@@ -526,7 +566,7 @@ export class Engine {
     }
     for (const m of members) {
       const item = await this.#itemByNumber(project.repo, m.ticket);
-      if (item) await this.#setStatus(item, STATUS.needsAstro);
+      if (item) await this.#setStatus(item, STATUS.needsInfo);
     }
     await this.#alert(`QA deploy of ${project.repo} failed (${conclusion}): ${list}\n${url}`);
   }
@@ -554,7 +594,7 @@ export class Engine {
     const affected = [...shipping, ...direct];
     for (const m of affected) {
       const item = await this.#itemByNumber(project.repo, m.ticket);
-      if (item) await this.#setStatus(item, STATUS.needsAstro);
+      if (item) await this.#setStatus(item, STATUS.needsInfo);
     }
     await this.#alert(`Production deploy of ${project.repo} failed (${conclusion}): ${affected.map((m) => `#${m.ticket}`).join(", ")}\n${url}`);
   }
@@ -606,6 +646,15 @@ export class Engine {
     await this.startWorker(item, text);
   }
 
+  /** Deploy stages run only once the workflows they dispatch exist on the default branch. */
+  async #deployReady(project: RepoConfig, defaultBranch: string): Promise<boolean> {
+    const files = [project.deploy.production.workflow, ...(project.tier === "critical" && project.deploy.qa ? [project.deploy.qa.workflow] : [])];
+    for (const file of files) {
+      if (!(await this.#d.repos.fileExists(project.repo, `.github/workflows/${file}`, defaultBranch))) return false;
+    }
+    return true;
+  }
+
   async #ensureReleaseBranch(project: RepoConfig, defaultBranch: string): Promise<string> {
     if (!(await this.#d.repos.branchExists(project.repo, RELEASE_BRANCH))) {
       await this.#d.repos.createBranch(project.repo, RELEASE_BRANCH, await this.#d.repos.branchSha(project.repo, defaultBranch));
@@ -646,14 +695,19 @@ export class Engine {
 
   async #setStatus(item: BoardItem, status: Status): Promise<void> {
     if (item.status === status) return;
+    const owner = this.#project(item.repo)?.owner;
     await this.#d.board.setStatus(item.itemId, status);
+    const previous = item.status;
     item.status = status;
     log("board", `${item.repo}#${item.number} -> ${status}`);
+    if (!owner) return;
+    if (status === STATUS.needsInfo) await this.#d.repos.assign(item.repo, item.number, owner);
+    else if (previous === STATUS.needsInfo) await this.#d.repos.unassign(item.repo, item.number, owner).catch(() => undefined);
   }
 
   async #escalate(item: BoardItem, reason: string): Promise<void> {
     await this.#d.repos.comment(item.repo, item.number, `**Astrogate stopped:** ${reason}`);
-    await this.#setStatus(item, STATUS.needsAstro);
+    await this.#setStatus(item, STATUS.needsInfo);
     await this.#alert(`${item.repo}#${item.number} needs you: ${reason}\n${this.#issueUrl(item)} · ${this.#d.board.url}`);
   }
 

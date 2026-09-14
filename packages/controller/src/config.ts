@@ -10,17 +10,23 @@ export interface DeployTarget {
   inputs: Record<string, string>;
 }
 
+/**
+ * tags: QA runs on a release-candidate tag push, production is dispatched with the final tag ("{tag}").
+ * dispatch: both workflows are dispatched on a ref ("{ref}").
+ */
+export type DeployStrategy = "tags" | "dispatch";
+
 export interface RepoConfig {
   repo: string;
   tier: Tier;
   checkScript: string;
-  deploy: { qa?: DeployTarget; production: DeployTarget; qaUrl?: string };
+  deploy: { strategy: DeployStrategy; qa?: DeployTarget; production: DeployTarget; qaUrl?: string };
 }
 
 export interface RepoDefaults {
   tier: Tier;
   checkScript: string;
-  deploy: { qa?: DeployTarget; production: DeployTarget };
+  deploy: { strategy: DeployStrategy; qa?: DeployTarget; production: DeployTarget };
 }
 
 export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
@@ -96,6 +102,11 @@ function parseTarget(value: unknown, where: string): DeployTarget {
   return { workflow, inputs };
 }
 
+function parseStrategy(value: unknown, where: string): DeployStrategy {
+  if (value !== "tags" && value !== "dispatch") throw new ConfigError(`${where} must be tags or dispatch`);
+  return value;
+}
+
 function parseDefaults(raw: Record<string, unknown>): RepoDefaults {
   const defaults = section(raw, "defaults");
   const deploy = section(defaults, "deploy");
@@ -103,7 +114,11 @@ function parseDefaults(raw: Record<string, unknown>): RepoDefaults {
   return {
     tier: parseTier(defaults["tier"], "defaults.tier"),
     checkScript: str(defaults, "checkScript", "defaults"),
-    deploy: { production: parseTarget(deploy["production"], "defaults.deploy.production"), ...(qa === undefined ? {} : { qa: parseTarget(qa, "defaults.deploy.qa") }) },
+    deploy: {
+      strategy: parseStrategy(deploy["strategy"], "defaults.deploy.strategy"),
+      production: parseTarget(deploy["production"], "defaults.deploy.production"),
+      ...(qa === undefined ? {} : { qa: parseTarget(qa, "defaults.deploy.qa") }),
+    },
   };
 }
 
@@ -118,8 +133,9 @@ function parseRepo(value: unknown, index: number, defaults: RepoDefaults): RepoC
   const production = deployRaw["production"] === undefined ? defaults.deploy.production : parseTarget(deployRaw["production"], `${where}.deploy.production`);
   const qa = deployRaw["qa"] === undefined ? defaults.deploy.qa : parseTarget(deployRaw["qa"], `${where}.deploy.qa`);
   const qaUrl = optStr(deployRaw, "qaUrl", `${where}.deploy`);
+  const strategy = deployRaw["strategy"] === undefined ? defaults.deploy.strategy : parseStrategy(deployRaw["strategy"], `${where}.deploy.strategy`);
   if (tier === "critical" && qa === undefined) throw new ConfigError(`${where}: critical repos need a QA deploy workflow (repo or defaults)`);
-  return { repo, tier, checkScript, deploy: { production, ...(qa ? { qa } : {}), ...(qaUrl ? { qaUrl } : {}) } };
+  return { repo, tier, checkScript, deploy: { strategy, production, ...(qa ? { qa } : {}), ...(qaUrl ? { qaUrl } : {}) } };
 }
 
 function parseModels(raw: Record<string, unknown>): Config["models"] {

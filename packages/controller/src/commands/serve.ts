@@ -50,6 +50,7 @@ export async function serve(paths: Paths): Promise<void> {
 
   // Sessions from before a restart reconnect within seconds; give them that head start.
   setTimeout(() => void live.recover().catch(report("recover")), 10_000);
+  void live.bootstrapRepos().catch(report("bootstrap"));
   const ticker = setInterval(() => void live.tick().catch(report("tick")), TICK_MS);
 
   const shutdown = (): void => {

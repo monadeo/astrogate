@@ -1,12 +1,13 @@
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
 import type { Paths } from "../paths.js";
 
 /**
- * GitHub App manifest flow, in two steps so it works over SSH:
- *   1. `astrogate init app --org ORG --webhook-url URL` prints a form page path; open it, click Create.
- *      GitHub redirects to a localhost URL that will not load; copy the `code` from it.
- *   2. `astrogate init app --code CODE` exchanges the code and writes config and secrets.
+ * GitHub App manifest flow. `init app` serves a form page and a callback on 127.0.0.1;
+ * the browser posts the manifest to GitHub, GitHub redirects back with a one-time code,
+ * and the callback exchanges it for the App id, private key, and webhook secret.
+ * `init app --code` remains for the case where the redirect could not be captured.
  */
 
 const PERMISSIONS = {
@@ -21,27 +22,27 @@ const PERMISSIONS = {
 
 const EVENTS = ["issues", "issue_comment", "pull_request", "pull_request_review", "check_suite", "workflow_run", "release", "projects_v2_item"];
 
-export function manifestFormHtml(org: string, webhookUrl: string): string {
+export function manifestFormHtml(org: string, webhookUrl: string, redirectUrl: string, state: string): string {
   const manifest = {
     name: "AstroGate",
     url: "https://github.com/monadeo/astrogate",
     hook_attributes: { url: webhookUrl, active: true },
-    redirect_url: "http://127.0.0.1:1/astrogate-init",
+    redirect_url: redirectUrl,
     public: false,
     default_permissions: PERMISSIONS,
     default_events: EVENTS,
   };
-  const state = randomBytes(8).toString("hex");
   const action = `https://github.com/organizations/${org}/settings/apps/new?state=${state}`;
   const escaped = JSON.stringify(manifest).replaceAll("&", "&amp;").replaceAll('"', "&quot;");
-  return `<!doctype html><title>Register Astrogate</title>
+  return `<!doctype html><title>Register AstroGate</title>
+<body style="font-family: system-ui; padding: 3rem">
 <form action="${action}" method="post">
 <input type="hidden" name="manifest" value="${escaped}">
-<button type="submit">Register the Astrogate GitHub App on ${org}</button>
-</form>`;
+<button type="submit" style="font-size: 1.2rem; padding: 1rem 2rem">Register the AstroGate GitHub App on ${org}</button>
+</form></body>`;
 }
 
-interface Conversion {
+export interface Conversion {
   id: number;
   slug: string;
   pem: string;
@@ -72,7 +73,7 @@ export function writeInitialConfig(paths: Paths, org: string, appId: number, app
   const config = {
     github: { org, owner: "", appId, appSlug, installationId: 0, projectNumber: 0 },
     listen: { host: "127.0.0.1", port: listenPort, path: webhookPath },
-    defaults: { tier: "critical", checkScript: "pnpm check", deploy: { qa: "deploy-qa.yml", production: "deploy-live.yml" } },
+    defaults: { tier: "critical", checkScript: "pnpm check", deploy: { strategy: "tags", qa: "deploy-qa.yml", production: { workflow: "deploy-live.yml", inputs: { tag: "{tag}" } } } },
     repos: [],
     concurrency: { workers: 2 },
     attemptCap: 3,
@@ -85,4 +86,44 @@ export function writeInitialConfig(paths: Paths, org: string, appId: number, app
     },
   };
   writeFileSync(paths.config, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
+}
+
+/** Serves the form and waits for GitHub's redirect; resolves with the exchanged credentials. */
+export function registerInteractively(org: string, webhookUrl: string, callbackPort: number): Promise<Conversion> {
+  const state = randomBytes(8).toString("hex");
+  const redirectUrl = `http://127.0.0.1:${callbackPort}/callback`;
+  const page = manifestFormHtml(org, webhookUrl, redirectUrl, state);
+  return new Promise((resolve, reject) => {
+    const server = createServer((req, res) => {
+      const url = new URL(req.url ?? "/", `http://127.0.0.1:${callbackPort}`);
+      if (url.pathname === "/") {
+        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" }).end(page);
+        return;
+      }
+      if (url.pathname !== "/callback") {
+        res.writeHead(404).end();
+        return;
+      }
+      const code = url.searchParams.get("code");
+      if (!code || url.searchParams.get("state") !== state) {
+        res.writeHead(400, { "Content-Type": "text/plain" }).end("Missing code or state mismatch. Run astrogate init app again.");
+        return;
+      }
+      exchangeManifestCode(code)
+        .then((conversion) => {
+          res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" }).end(`<!doctype html><body style="font-family: system-ui; padding: 3rem"><h1>AstroGate registered</h1><p>App ${conversion.slug} (id ${conversion.id}). You can close this tab.</p></body>`);
+          server.close();
+          resolve(conversion);
+        })
+        .catch((error: unknown) => {
+          res.writeHead(500, { "Content-Type": "text/plain" }).end(String(error));
+          server.close();
+          reject(error instanceof Error ? error : new Error(String(error)));
+        });
+    });
+    server.once("error", reject);
+    server.listen(callbackPort, "127.0.0.1", () => {
+      console.log(`Open http://127.0.0.1:${callbackPort}/ and click the button. Waiting for GitHub's redirect...`);
+    });
+  });
 }

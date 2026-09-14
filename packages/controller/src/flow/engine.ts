@@ -14,7 +14,9 @@ import type { AttemptRow, StateDb } from "../state/db.js";
 import type { WebhookEvent } from "../webhook/server.js";
 import { runCheck } from "./check.js";
 import { parseEvent } from "./events.js";
-import { changedFiles, commitCount, ensureClone, headSha, isClean, push, repoDir } from "./git.js";
+import { changedFiles, commitCount, ensureClone, git, headSha, isClean, push, repoDir } from "./git.js";
+import { commitVersion, readPackageVersion } from "./release.js";
+import { highestLevel, levelFromLabels, nextCandidate, nextFinal, type ReleaseLevel } from "./version.js";
 import { STATUS, type Status } from "./status.js";
 
 const BRIEF_MARKER = "<!-- astrogate:brief -->";
@@ -97,7 +99,8 @@ export class Engine {
         const project = this.#project(parsed.repo);
         if (!project) return;
         const file = parsed.path.split("/").pop() ?? "";
-        if (project.deploy.qa && file === project.deploy.qa.workflow) await this.#onQaResult(project, parsed.conclusion, parsed.htmlUrl);
+        const candidateRun = project.deploy.strategy !== "tags" || /-rc\.\d+$/.test(parsed.headBranch);
+        if (project.deploy.qa && file === project.deploy.qa.workflow && candidateRun) await this.#onQaResult(project, parsed.conclusion, parsed.htmlUrl);
         else if (file === project.deploy.production.workflow) await this.#onProductionResult(project, parsed.conclusion, parsed.htmlUrl);
         return;
       }
@@ -176,6 +179,35 @@ export class Engine {
           await this.#alert(`Reminder: ${item.repo}#${item.number} is still in ${status}. ${this.#issueUrl(item)} · ${this.#d.board.url}`);
         }
       }
+    }
+  }
+
+  /**
+   * A configured repository without a single commit gets a first commit (so branches and
+   * worktrees exist) and a ticket asking the owner how to bootstrap it.
+   */
+  async bootstrapRepos(): Promise<void> {
+    for (const project of this.#d.config.repos) {
+      if (!(await this.#d.repos.isEmpty(project.repo))) continue;
+      const title = `Bootstrap ${project.repo}`;
+      await this.#d.repos.createFile(project.repo, "README.md", `# ${project.repo.split("/")[1]}\n`, "Initialize repository");
+      if ((await this.#d.repos.openIssuesTitled(project.repo, title)).length > 0) continue;
+      const body = [
+        "This repository was empty. Astrogate created the first commit (README only) so branches and worktrees can exist.",
+        "",
+        "Decide the baseline before the first feature ticket. Astrogate needs, on the default branch:",
+        `- a \`package.json\` with a version and the check script (\`${project.checkScript}\`)`,
+        project.deploy.qa ? `- \`.github/workflows/${project.deploy.qa.workflow}\` deploying to QA on a \`v*\` tag push (release candidates are tagged \`vX.Y.Z-rc.N\`)` : "",
+        `- \`.github/workflows/${project.deploy.production.workflow}\` deploying to production, dispatched with the final tag as input \`tag\``,
+        "",
+        "Reply with what this project is and which stack, tooling, and hosting it uses, or say \"default\" for a minimal Node/pnpm baseline with those files. The foreman will turn your answer into a brief and a worker will build it.",
+      ]
+        .filter((line) => line.length > 0)
+        .join("\n");
+      const issue = await this.#d.repos.createIssue(project.repo, title, body);
+      const item = (await this.#d.board.itemForIssue(issue.nodeId)) ?? (await this.#addToBoard(issue.nodeId));
+      await this.#setStatus(item, STATUS.needsAstro);
+      await this.#alert(`${project.repo} is empty. Decide its baseline on ${issue.htmlUrl}`);
     }
   }
 
@@ -423,11 +455,61 @@ export class Engine {
     if (project.tier === "critical" && project.deploy.qa) {
       this.#d.db.setMember(worker.repo, worker.ticket, "qa");
       await this.#setStatus(item, STATUS.qa);
-      await this.#d.repos.dispatchWorkflow(worker.repo, project.deploy.qa.workflow, RELEASE_BRANCH, project.deploy.qa.inputs);
+      if (project.deploy.strategy === "tags") await this.#cutCandidate(project, defaultBranch);
+      else await this.#d.repos.dispatchWorkflow(worker.repo, project.deploy.qa.workflow, RELEASE_BRANCH, project.deploy.qa.inputs);
     } else {
       this.#d.db.setMember(worker.repo, worker.ticket, "prod");
-      await this.#d.repos.dispatchWorkflow(worker.repo, project.deploy.production.workflow, defaultBranch, project.deploy.production.inputs);
+      await this.#shipMain(project, defaultBranch);
     }
+  }
+
+  /** Release level for everything currently in the release: the highest label among its tickets. */
+  async #releaseLevel(project: RepoConfig): Promise<ReleaseLevel> {
+    const levels: ReleaseLevel[] = [];
+    for (const m of this.#d.db.members(project.repo)) {
+      const issue = await this.#d.repos.issue(project.repo, m.ticket);
+      levels.push(levelFromLabels(issue.labels));
+    }
+    return highestLevel(levels);
+  }
+
+  /** Tags strategy, QA side: bump to the next release candidate on the release branch and tag it. */
+  async #cutCandidate(project: RepoConfig, defaultBranch: string): Promise<void> {
+    const clone = await this.#clone(project);
+    const token = await this.#writeToken(project);
+    await this.#fetchAll(clone, token);
+    const mainVersion = await readPackageVersion(clone, `origin/${defaultBranch}`);
+    const branchVersion = await readPackageVersion(clone, `origin/${RELEASE_BRANCH}`);
+    const version = nextCandidate(mainVersion, branchVersion, await this.#releaseLevel(project));
+    const sha = await commitVersion(clone, RELEASE_BRANCH, version, token);
+    await this.#d.repos.createTag(project.repo, `v${version}`, sha);
+    log("release", `${project.repo} candidate v${version} tagged`);
+  }
+
+  /** Production from the default branch: tag a final version (tags strategy) or dispatch the workflow on the branch. */
+  async #shipMain(project: RepoConfig, defaultBranch: string): Promise<void> {
+    if (project.deploy.strategy !== "tags") {
+      await this.#d.repos.dispatchWorkflow(project.repo, project.deploy.production.workflow, defaultBranch, project.deploy.production.inputs);
+      return;
+    }
+    const clone = await this.#clone(project);
+    const token = await this.#writeToken(project);
+    await this.#fetchAll(clone, token);
+    const mainVersion = await readPackageVersion(clone, `origin/${defaultBranch}`);
+    const version = nextFinal(mainVersion, await this.#releaseLevel(project));
+    const sha = await commitVersion(clone, defaultBranch, version, token);
+    const tag = `v${version}`;
+    await this.#d.repos.createTag(project.repo, tag, sha);
+    await this.#d.repos.dispatchWorkflow(project.repo, project.deploy.production.workflow, defaultBranch, project.deploy.production.inputs, tag);
+    log("release", `${project.repo} ${tag} tagged and production dispatched`);
+  }
+
+  async #writeToken(project: RepoConfig): Promise<string> {
+    return this.#d.github.installationToken({ repositories: [project.repo.split("/")[1] ?? ""], permissions: { contents: "write" } });
+  }
+
+  async #fetchAll(clone: string, token: string): Promise<void> {
+    await git(clone, ["fetch", "--quiet", "--prune", "origin"], token);
   }
 
   async #onQaResult(project: RepoConfig, conclusion: string, url: string): Promise<void> {
@@ -492,7 +574,7 @@ export class Engine {
     const defaultBranch = await this.#defaultBranch(project);
     await this.#d.repos.mergeBranches(item.repo, defaultBranch, RELEASE_BRANCH, `Release: ${members.map((m) => `#${m.ticket}`).join(", ")}`);
     for (const m of members) this.#d.db.setMember(item.repo, m.ticket, "shipping");
-    await this.#d.repos.dispatchWorkflow(item.repo, project.deploy.production.workflow, defaultBranch, project.deploy.production.inputs);
+    await this.#shipMain(project, defaultBranch);
   }
 
   async #onAnswer(item: BoardItem, body: string): Promise<void> {

@@ -1,7 +1,6 @@
-import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { mkdirSync } from "node:fs";
 import { parseArgs } from "node:util";
-import { exchangeManifestCode, manifestFormHtml, writeAppSecrets, writeInitialConfig } from "./commands/init.js";
+import { exchangeManifestCode, registerInteractively, writeAppSecrets, writeInitialConfig } from "./commands/init.js";
 import { serve } from "./commands/serve.js";
 import { initBoard } from "./commands/board.js";
 import { status } from "./commands/status.js";
@@ -19,6 +18,7 @@ async function initApp(args: string[]): Promise<void> {
       "webhook-url": { type: "string" },
       code: { type: "string" },
       port: { type: "string", default: "8787" },
+      "callback-port": { type: "string", default: "8791" },
     },
   });
   const paths = resolvePaths();
@@ -36,11 +36,11 @@ async function initApp(args: string[]): Promise<void> {
     return;
   }
   if (!values.org || !values["webhook-url"]) throw new ConfigError("init app needs --org and --webhook-url, or --code");
-  const file = join(paths.home, "register.html");
-  writeFileSync(file, manifestFormHtml(values.org, values["webhook-url"]));
-  console.log(`Open ${file} in a browser and click the button.`);
-  console.log(`GitHub redirects to a 127.0.0.1 URL that will not load; copy its code= value and run:`);
-  console.log(`  astrogate init app --org ${values.org} --code <CODE>`);
+  const conversion = await registerInteractively(values.org, values["webhook-url"], Number(values["callback-port"]));
+  writeAppSecrets(paths, conversion);
+  writeInitialConfig(paths, values.org, conversion.id, conversion.slug, port, "/webhook");
+  console.log(`App ${conversion.slug} (id ${conversion.id}) registered. Secrets in ${paths.secrets}.`);
+  console.log(`Install it: https://github.com/apps/${conversion.slug}/installations/new`);
 }
 
 async function main(argv: string[]): Promise<void> {

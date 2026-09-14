@@ -4,7 +4,7 @@ import { parseConfig } from "./config.js";
 const valid = {
   github: { org: "acme", owner: "astro", appId: 1, appSlug: "astrogate", installationId: 2, projectNumber: 3 },
   listen: { host: "127.0.0.1", port: 8787, path: "/webhook" },
-  defaults: { tier: "critical", checkScript: "pnpm check", deploy: { qa: "deploy-qa.yml", production: { workflow: "deploy-live.yml", inputs: { tag: "{ref}" } } } },
+  defaults: { tier: "critical", checkScript: "pnpm check", deploy: { strategy: "tags", qa: "deploy-qa.yml", production: { workflow: "deploy-live.yml", inputs: { tag: "{tag}" } } } },
   repos: [{ repo: "acme/app" }, { repo: "acme/tool", tier: "non-critical", checkScript: "npm test" }],
   concurrency: { workers: 2 },
   attemptCap: 3,
@@ -20,12 +20,12 @@ const valid = {
 describe("parseConfig", () => {
   it("fills repos from defaults and keeps overrides", () => {
     const config = parseConfig(valid);
-    expect(config.repos[0]).toEqual({ repo: "acme/app", tier: "critical", checkScript: "pnpm check", deploy: { qa: { workflow: "deploy-qa.yml", inputs: {} }, production: { workflow: "deploy-live.yml", inputs: { tag: "{ref}" } } } });
+    expect(config.repos[0]).toEqual({ repo: "acme/app", tier: "critical", checkScript: "pnpm check", deploy: { strategy: "tags", qa: { workflow: "deploy-qa.yml", inputs: {} }, production: { workflow: "deploy-live.yml", inputs: { tag: "{tag}" } } } });
     expect(config.repos[1].tier).toBe("non-critical");
     expect(config.repos[1].checkScript).toBe("npm test");
   });
   it("requires a QA workflow for critical repos", () => {
-    const broken = { ...valid, defaults: { ...valid.defaults, deploy: { production: "live.yml" } } };
+    const broken = { ...valid, defaults: { ...valid.defaults, deploy: { strategy: "tags", production: "live.yml" } } };
     expect(() => parseConfig(broken)).toThrow(/critical repos need a QA deploy workflow/);
   });
   it("rejects an unknown thinking level", () => {

@@ -4,7 +4,7 @@ export function helpText(version: string): string {
 Usage: astrogate <command> [options]
 
 Commands:
-  init app --org ORG --webhook-url URL   Write the GitHub App registration form to ~/.astrogate/register.html
+  init app --org ORG --webhook-url URL   Register the GitHub App in the browser; writes config and secrets
   init app --code CODE                   Exchange the manifest code; writes config and secrets
   init board [--title TITLE] [--number N]  Adopt or create the org board and its Status options; sets github.projectNumber
   serve                                  Run the controller

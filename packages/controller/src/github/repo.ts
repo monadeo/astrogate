@@ -7,6 +7,7 @@ export interface IssueInfo {
   body: string;
   htmlUrl: string;
   state: "open" | "closed";
+  labels: string[];
 }
 
 export interface PullInfo {
@@ -32,6 +33,7 @@ interface RawIssue {
   body: string | null;
   html_url: string;
   state: "open" | "closed";
+  labels: { name: string }[];
 }
 
 interface RawPull {
@@ -44,7 +46,7 @@ interface RawPull {
 }
 
 function toIssue(raw: RawIssue): IssueInfo {
-  return { nodeId: raw.node_id, number: raw.number, title: raw.title, body: raw.body ?? "", htmlUrl: raw.html_url, state: raw.state };
+  return { nodeId: raw.node_id, number: raw.number, title: raw.title, body: raw.body ?? "", htmlUrl: raw.html_url, state: raw.state, labels: raw.labels.map((l) => l.name) };
 }
 
 function toPull(raw: RawPull): PullInfo {
@@ -146,14 +148,35 @@ export class RepoApi {
     return this.#github.request<unknown>("POST", `/repos/${repo}/merges`, { base, head, commit_message: message }).then(() => undefined);
   }
 
-  dispatchWorkflow(repo: string, workflowFile: string, ref: string, inputs: Record<string, string> = {}): Promise<void> {
-    const expanded = Object.fromEntries(Object.entries(inputs).map(([k, v]) => [k, v.replaceAll("{ref}", ref)]));
+  dispatchWorkflow(repo: string, workflowFile: string, ref: string, inputs: Record<string, string> = {}, tag = ref): Promise<void> {
+    const expanded = Object.fromEntries(Object.entries(inputs).map(([k, v]) => [k, v.replaceAll("{ref}", ref).replaceAll("{tag}", tag)]));
     return this.#github
       .request<unknown>("POST", `/repos/${repo}/actions/workflows/${encodeURIComponent(workflowFile)}/dispatches`, {
         ref,
         ...(Object.keys(expanded).length > 0 ? { inputs: expanded } : {}),
       })
       .then(() => undefined);
+  }
+
+  createTag(repo: string, tag: string, sha: string): Promise<void> {
+    return this.#github.request<unknown>("POST", `/repos/${repo}/git/refs`, { ref: `refs/tags/${tag}`, sha }).then(() => undefined);
+  }
+
+  async isEmpty(repo: string): Promise<boolean> {
+    const branches = await this.#github.request<unknown[]>("GET", `/repos/${repo}/branches?per_page=1`);
+    return branches.length === 0;
+  }
+
+  /** First commit on an empty repository; creates the default branch. */
+  createFile(repo: string, path: string, content: string, message: string): Promise<void> {
+    return this.#github
+      .request<unknown>("PUT", `/repos/${repo}/contents/${path}`, { message, content: Buffer.from(content, "utf8").toString("base64") })
+      .then(() => undefined);
+  }
+
+  async openIssuesTitled(repo: string, title: string): Promise<IssueInfo[]> {
+    const raw = await this.#github.request<RawIssue[]>("GET", `/repos/${repo}/issues?state=open&per_page=100`);
+    return raw.filter((i) => i.title === title).map(toIssue);
   }
 
   async defaultBranch(repo: string): Promise<string> {

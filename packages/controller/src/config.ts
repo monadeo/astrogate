@@ -4,11 +4,23 @@ import type { Paths } from "./paths.js";
 
 export type Tier = "critical" | "non-critical";
 
+export interface DeployTarget {
+  workflow: string;
+  /** Static workflow_dispatch inputs; "{ref}" expands to the dispatched ref. */
+  inputs: Record<string, string>;
+}
+
 export interface RepoConfig {
   repo: string;
   tier: Tier;
   checkScript: string;
-  deploy: { qa?: string; production: string; qaUrl?: string };
+  deploy: { qa?: DeployTarget; production: DeployTarget; qaUrl?: string };
+}
+
+export interface RepoDefaults {
+  tier: Tier;
+  checkScript: string;
+  deploy: { qa?: DeployTarget; production: DeployTarget };
 }
 
 export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
@@ -16,6 +28,7 @@ export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhi
 export interface Config {
   github: { org: string; owner: string; appId: number; appSlug: string; installationId: number; projectNumber: number };
   listen: { host: string; port: number; path: string };
+  defaults: RepoDefaults;
   repos: RepoConfig[];
   concurrency: { workers: number };
   attemptCap: number;
@@ -64,23 +77,49 @@ function section(obj: Record<string, unknown>, key: string): Record<string, unkn
   return v;
 }
 
-function parseRepo(value: unknown, index: number): RepoConfig {
+function parseTier(value: unknown, where: string): Tier {
+  if (value !== "critical" && value !== "non-critical") throw new ConfigError(`${where} must be critical or non-critical`);
+  return value;
+}
+
+function parseTarget(value: unknown, where: string): DeployTarget {
+  if (typeof value === "string" && value.length > 0) return { workflow: value, inputs: {} };
+  if (!isRecord(value)) throw new ConfigError(`${where} must be a workflow file name or { workflow, inputs }`);
+  const workflow = str(value, "workflow", where);
+  const rawInputs = value["inputs"] ?? {};
+  if (!isRecord(rawInputs)) throw new ConfigError(`${where}.inputs must be an object of strings`);
+  const inputs: Record<string, string> = {};
+  for (const [k, v] of Object.entries(rawInputs)) {
+    if (typeof v !== "string") throw new ConfigError(`${where}.inputs.${k} must be a string`);
+    inputs[k] = v;
+  }
+  return { workflow, inputs };
+}
+
+function parseDefaults(raw: Record<string, unknown>): RepoDefaults {
+  const defaults = section(raw, "defaults");
+  const deploy = section(defaults, "deploy");
+  const qa = deploy["qa"];
+  return {
+    tier: parseTier(defaults["tier"], "defaults.tier"),
+    checkScript: str(defaults, "checkScript", "defaults"),
+    deploy: { production: parseTarget(deploy["production"], "defaults.deploy.production"), ...(qa === undefined ? {} : { qa: parseTarget(qa, "defaults.deploy.qa") }) },
+  };
+}
+
+function parseRepo(value: unknown, index: number, defaults: RepoDefaults): RepoConfig {
   const where = `repos[${index}]`;
   if (!isRecord(value)) throw new ConfigError(`${where} must be an object`);
   const repo = str(value, "repo", where);
   if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) throw new ConfigError(`${where}.repo must be owner/name`);
-  const tier = str(value, "tier", where);
-  if (tier !== "critical" && tier !== "non-critical") throw new ConfigError(`${where}.tier must be critical or non-critical`);
-  const deploy = section(value, "deploy");
-  const qa = optStr(deploy, "qa", `${where}.deploy`);
-  const qaUrl = optStr(deploy, "qaUrl", `${where}.deploy`);
-  if (tier === "critical" && qa === undefined) throw new ConfigError(`${where}.deploy.qa is required for critical projects`);
-  return {
-    repo,
-    tier,
-    checkScript: str(value, "checkScript", where),
-    deploy: { production: str(deploy, "production", `${where}.deploy`), ...(qa ? { qa } : {}), ...(qaUrl ? { qaUrl } : {}) },
-  };
+  const tier = value["tier"] === undefined ? defaults.tier : parseTier(value["tier"], `${where}.tier`);
+  const checkScript = value["checkScript"] === undefined ? defaults.checkScript : str(value, "checkScript", where);
+  const deployRaw = value["deploy"] === undefined ? {} : section(value, "deploy");
+  const production = deployRaw["production"] === undefined ? defaults.deploy.production : parseTarget(deployRaw["production"], `${where}.deploy.production`);
+  const qa = deployRaw["qa"] === undefined ? defaults.deploy.qa : parseTarget(deployRaw["qa"], `${where}.deploy.qa`);
+  const qaUrl = optStr(deployRaw, "qaUrl", `${where}.deploy`);
+  if (tier === "critical" && qa === undefined) throw new ConfigError(`${where}: critical repos need a QA deploy workflow (repo or defaults)`);
+  return { repo, tier, checkScript, deploy: { production, ...(qa ? { qa } : {}), ...(qaUrl ? { qaUrl } : {}) } };
 }
 
 function parseModels(raw: Record<string, unknown>): Config["models"] {
@@ -104,6 +143,7 @@ export function parseConfig(raw: unknown): Config {
   const worker = section(raw, "worker");
   const repos = raw["repos"];
   if (!Array.isArray(repos)) throw new ConfigError("repos must be an array");
+  const defaults = parseDefaults(raw);
   return {
     github: {
       org: str(github, "org", "github"),
@@ -114,7 +154,8 @@ export function parseConfig(raw: unknown): Config {
       projectNumber: num(github, "projectNumber", "github"),
     },
     listen: { host: str(listen, "host", "listen"), port: num(listen, "port", "listen"), path: str(listen, "path", "listen") },
-    repos: repos.map(parseRepo),
+    defaults,
+    repos: repos.map((r, i) => parseRepo(r, i, defaults)),
     concurrency: { workers: num(concurrency, "workers", "concurrency") },
     attemptCap: num(raw, "attemptCap", "config"),
     reminders: { afterMinutes: num(reminders, "afterMinutes", "reminders") },

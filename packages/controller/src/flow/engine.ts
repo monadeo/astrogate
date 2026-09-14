@@ -97,8 +97,8 @@ export class Engine {
         const project = this.#project(parsed.repo);
         if (!project) return;
         const file = parsed.path.split("/").pop() ?? "";
-        if (project.deploy.qa && file === project.deploy.qa) await this.#onQaResult(project, parsed.conclusion, parsed.htmlUrl);
-        else if (file === project.deploy.production) await this.#onProductionResult(project, parsed.conclusion, parsed.htmlUrl);
+        if (project.deploy.qa && file === project.deploy.qa.workflow) await this.#onQaResult(project, parsed.conclusion, parsed.htmlUrl);
+        else if (file === project.deploy.production.workflow) await this.#onProductionResult(project, parsed.conclusion, parsed.htmlUrl);
         return;
       }
       case "ignored":
@@ -423,10 +423,10 @@ export class Engine {
     if (project.tier === "critical" && project.deploy.qa) {
       this.#d.db.setMember(worker.repo, worker.ticket, "qa");
       await this.#setStatus(item, STATUS.qa);
-      await this.#d.repos.dispatchWorkflow(worker.repo, project.deploy.qa, RELEASE_BRANCH);
+      await this.#d.repos.dispatchWorkflow(worker.repo, project.deploy.qa.workflow, RELEASE_BRANCH, project.deploy.qa.inputs);
     } else {
       this.#d.db.setMember(worker.repo, worker.ticket, "prod");
-      await this.#d.repos.dispatchWorkflow(worker.repo, project.deploy.production, defaultBranch);
+      await this.#d.repos.dispatchWorkflow(worker.repo, project.deploy.production.workflow, defaultBranch, project.deploy.production.inputs);
     }
   }
 
@@ -492,7 +492,7 @@ export class Engine {
     const defaultBranch = await this.#defaultBranch(project);
     await this.#d.repos.mergeBranches(item.repo, defaultBranch, RELEASE_BRANCH, `Release: ${members.map((m) => `#${m.ticket}`).join(", ")}`);
     for (const m of members) this.#d.db.setMember(item.repo, m.ticket, "shipping");
-    await this.#d.repos.dispatchWorkflow(item.repo, project.deploy.production, defaultBranch);
+    await this.#d.repos.dispatchWorkflow(item.repo, project.deploy.production.workflow, defaultBranch, project.deploy.production.inputs);
   }
 
   async #onAnswer(item: BoardItem, body: string): Promise<void> {

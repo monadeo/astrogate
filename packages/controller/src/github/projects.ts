@@ -13,26 +13,59 @@ const STATUS_COLORS: Record<Status, string> = {
   Blocked: "RED",
 };
 
-/** Creates the board with the Status options Astrogate drives, returns its number. */
-export async function createBoard(github: GitHubApp, org: string, title: string): Promise<number> {
-  const owner = await github.graphql<{ organization: { id: string } }>(`query($org: String!) { organization(login: $org) { id } }`, { org });
-  const created = await github.graphql<{ createProjectV2: { projectV2: { id: string; number: number; field: { id: string } | null } } }>(
-    `mutation($owner: ID!, $title: String!) {
-      createProjectV2(input: { ownerId: $owner, title: $title }) {
-        projectV2 { id number field(name: "Status") { ... on ProjectV2SingleSelectField { id } } }
-      }
-    }`,
-    { owner: owner.organization.id, title },
+interface BoardHandle {
+  id: string;
+  number: number;
+  field: { id: string; options: { id: string; name: string }[] } | null;
+}
+
+const BOARD_FRAGMENT = `id number field(name: "Status") { ... on ProjectV2SingleSelectField { id options { id name } } }`;
+
+async function findBoard(github: GitHubApp, org: string, title: string, number?: number): Promise<BoardHandle | undefined> {
+  if (number !== undefined) {
+    const data = await github.graphql<{ organization: { projectV2: BoardHandle | null } }>(
+      `query($org: String!, $number: Int!) { organization(login: $org) { projectV2(number: $number) { ${BOARD_FRAGMENT} } } }`,
+      { org, number },
+    );
+    return data.organization.projectV2 ?? undefined;
+  }
+  const data = await github.graphql<{ organization: { projectsV2: { nodes: (BoardHandle & { title: string })[] } } }>(
+    `query($org: String!, $query: String!) { organization(login: $org) { projectsV2(first: 20, query: $query) { nodes { title ${BOARD_FRAGMENT} } } } }`,
+    { org, query: title },
   );
-  const project = created.createProjectV2.projectV2;
-  if (!project.field) throw new Error("new project has no Status field");
-  await github.graphql(
-    `mutation($field: ID!, $options: [ProjectV2SingleSelectFieldOptionInput!]!) {
-      updateProjectV2Field(input: { fieldId: $field, singleSelectOptions: $options }) { projectV2Field { ... on ProjectV2SingleSelectField { id } } }
-    }`,
-    { field: project.field.id, options: ALL_STATUSES.map((name) => ({ name, color: STATUS_COLORS[name], description: "" })) },
-  );
-  return project.number;
+  return data.organization.projectsV2.nodes.find((n) => n.title.toLowerCase() === title.toLowerCase());
+}
+
+/**
+ * Adopts the board named `title` (or numbered `number`) or creates it, then makes sure the
+ * Status field carries every option Astrogate drives. Existing options keep their ids.
+ */
+export async function ensureBoard(github: GitHubApp, org: string, title: string, number?: number): Promise<{ number: number; created: boolean }> {
+  let board = await findBoard(github, org, title, number);
+  let created = false;
+  if (!board) {
+    if (number !== undefined) throw new Error(`Project ${number} not found in ${org}`);
+    const owner = await github.graphql<{ organization: { id: string } }>(`query($org: String!) { organization(login: $org) { id } }`, { org });
+    const data = await github.graphql<{ createProjectV2: { projectV2: BoardHandle } }>(
+      `mutation($owner: ID!, $title: String!) { createProjectV2(input: { ownerId: $owner, title: $title }) { projectV2 { ${BOARD_FRAGMENT} } } }`,
+      { owner: owner.organization.id, title },
+    );
+    board = data.createProjectV2.projectV2;
+    created = true;
+  }
+  if (!board.field) throw new Error(`Project ${board.number} has no single-select "Status" field`);
+  const present = new Set(board.field.options.map((o) => o.name));
+  if (ALL_STATUSES.some((name) => !present.has(name))) {
+    const kept = board.field.options.map((o) => ({ id: o.id, name: o.name, color: STATUS_COLORS[o.name as Status] ?? "GRAY", description: "" }));
+    const added = ALL_STATUSES.filter((name) => !present.has(name)).map((name) => ({ name, color: STATUS_COLORS[name], description: "" }));
+    await github.graphql(
+      `mutation($field: ID!, $options: [ProjectV2SingleSelectFieldOptionInput!]!) {
+        updateProjectV2Field(input: { fieldId: $field, singleSelectOptions: $options }) { projectV2Field { ... on ProjectV2SingleSelectField { id } } }
+      }`,
+      { field: board.field.id, options: [...kept, ...added] },
+    );
+  }
+  return { number: board.number, created };
 }
 
 export interface BoardItem {

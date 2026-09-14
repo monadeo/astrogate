@@ -23,7 +23,7 @@ const EVENTS = ["issues", "issue_comment", "pull_request", "pull_request_review"
 
 export function manifestFormHtml(org: string, webhookUrl: string): string {
   const manifest = {
-    name: "Astrogate",
+    name: "AstroGate",
     url: "https://github.com/monadeo/astrogate",
     hook_attributes: { url: webhookUrl, active: true },
     redirect_url: "http://127.0.0.1:1/astrogate-init",
@@ -72,6 +72,7 @@ export function writeInitialConfig(paths: Paths, org: string, appId: number, app
   const config = {
     github: { org, owner: "", appId, appSlug, installationId: 0, projectNumber: 0 },
     listen: { host: "127.0.0.1", port: listenPort, path: webhookPath },
+    defaults: { tier: "critical", checkScript: "pnpm check", deploy: { qa: "deploy-qa.yml", production: "deploy-live.yml" } },
     repos: [],
     concurrency: { workers: 2 },
     attemptCap: 3,

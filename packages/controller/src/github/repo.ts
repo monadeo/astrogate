@@ -146,9 +146,13 @@ export class RepoApi {
     return this.#github.request<unknown>("POST", `/repos/${repo}/merges`, { base, head, commit_message: message }).then(() => undefined);
   }
 
-  dispatchWorkflow(repo: string, workflowFile: string, ref: string): Promise<void> {
+  dispatchWorkflow(repo: string, workflowFile: string, ref: string, inputs: Record<string, string> = {}): Promise<void> {
+    const expanded = Object.fromEntries(Object.entries(inputs).map(([k, v]) => [k, v.replaceAll("{ref}", ref)]));
     return this.#github
-      .request<unknown>("POST", `/repos/${repo}/actions/workflows/${encodeURIComponent(workflowFile)}/dispatches`, { ref })
+      .request<unknown>("POST", `/repos/${repo}/actions/workflows/${encodeURIComponent(workflowFile)}/dispatches`, {
+        ref,
+        ...(Object.keys(expanded).length > 0 ? { inputs: expanded } : {}),
+      })
       .then(() => undefined);
   }
 

@@ -4,7 +4,8 @@ import { parseConfig } from "./config.js";
 const valid = {
   github: { org: "acme", owner: "astro", appId: 1, appSlug: "astrogate", installationId: 2, projectNumber: 3 },
   listen: { host: "127.0.0.1", port: 8787, path: "/webhook" },
-  repos: [{ repo: "acme/app", tier: "critical", checkScript: "pnpm check", deploy: { qa: "qa.yml", production: "live.yml" } }],
+  defaults: { tier: "critical", checkScript: "pnpm check", deploy: { qa: "deploy-qa.yml", production: { workflow: "deploy-live.yml", inputs: { tag: "{ref}" } } } },
+  repos: [{ repo: "acme/app" }, { repo: "acme/tool", tier: "non-critical", checkScript: "npm test" }],
   concurrency: { workers: 2 },
   attemptCap: 3,
   reminders: { afterMinutes: 240 },
@@ -17,12 +18,15 @@ const valid = {
 };
 
 describe("parseConfig", () => {
-  it("accepts a complete config", () => {
-    expect(parseConfig(valid).repos[0].tier).toBe("critical");
+  it("fills repos from defaults and keeps overrides", () => {
+    const config = parseConfig(valid);
+    expect(config.repos[0]).toEqual({ repo: "acme/app", tier: "critical", checkScript: "pnpm check", deploy: { qa: { workflow: "deploy-qa.yml", inputs: {} }, production: { workflow: "deploy-live.yml", inputs: { tag: "{ref}" } } } });
+    expect(config.repos[1].tier).toBe("non-critical");
+    expect(config.repos[1].checkScript).toBe("npm test");
   });
-  it("requires a QA workflow for critical projects", () => {
-    const broken = { ...valid, repos: [{ ...valid.repos[0], deploy: { production: "live.yml" } }] };
-    expect(() => parseConfig(broken)).toThrow(/deploy.qa is required/);
+  it("requires a QA workflow for critical repos", () => {
+    const broken = { ...valid, defaults: { ...valid.defaults, deploy: { production: "live.yml" } } };
+    expect(() => parseConfig(broken)).toThrow(/critical repos need a QA deploy workflow/);
   });
   it("rejects an unknown thinking level", () => {
     const broken = { ...valid, models: { ...valid.models, worker: { model: "x", thinking: "turbo" } } };

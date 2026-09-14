@@ -59,7 +59,8 @@ try {
     run(`npm version ${next} --no-git-tag-version --allow-same-version`, { cwd: dir });
   }
   run(`git add ${manifests.join(" ")}`);
-  run(`git commit -m "Release ${tag}"`);
+  // [skip ci] keeps the push from starting a ci run; the release workflow is dispatched below.
+  run(`git commit -m "Release ${tag} [skip ci]"`);
   // Annotated tag: `git push --follow-tags` only pushes annotated tags, and the
   // tag push is what triggers the release workflow.
   run(`git tag -a ${tag} -m ${tag}`);
@@ -70,7 +71,8 @@ try {
   process.exit(1);
 }
 
-// Wait for the workflow run triggered by the tag, then stream it.
+// Start the release workflow on the tag, then stream it.
+run(`gh workflow run release.yml --ref ${tag}`);
 let runId = "";
 for (let attempt = 0; attempt < 30 && !runId; attempt += 1) {
   runId = capture(
@@ -79,7 +81,7 @@ for (let attempt = 0; attempt < 30 && !runId; attempt += 1) {
   if (!runId) await new Promise((resolve) => setTimeout(resolve, 5000));
 }
 if (!runId) {
-  console.error(`Tag ${tag} pushed, but no release run appeared within 150 s. Check: gh run list --workflow release.yml`);
+  console.error(`Tag ${tag} pushed and workflow dispatched, but no run appeared within 150 s. Check: gh run list --workflow release.yml`);
   process.exit(1);
 }
 run(`gh run watch ${runId} --exit-status`);

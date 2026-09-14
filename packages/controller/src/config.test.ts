@@ -4,7 +4,7 @@ import { parseConfig } from "./config.js";
 const valid = {
   github: { org: "acme", owner: "astro", appId: 1, appSlug: "astrogate", installationId: 2, projectNumber: 3 },
   listen: { host: "127.0.0.1", port: 8787, path: "/webhook" },
-  projects: [{ repo: "acme/app", tier: "critical", checkScript: "pnpm check", deploy: { qa: "qa.yml", production: "live.yml" } }],
+  repos: [{ repo: "acme/app", tier: "critical", checkScript: "pnpm check", deploy: { qa: "qa.yml", production: "live.yml" } }],
   concurrency: { workers: 2 },
   attemptCap: 3,
   reminders: { afterMinutes: 240 },
@@ -18,10 +18,10 @@ const valid = {
 
 describe("parseConfig", () => {
   it("accepts a complete config", () => {
-    expect(parseConfig(valid).projects[0].tier).toBe("critical");
+    expect(parseConfig(valid).repos[0].tier).toBe("critical");
   });
   it("requires a QA workflow for critical projects", () => {
-    const broken = { ...valid, projects: [{ ...valid.projects[0], deploy: { production: "live.yml" } }] };
+    const broken = { ...valid, repos: [{ ...valid.repos[0], deploy: { production: "live.yml" } }] };
     expect(() => parseConfig(broken)).toThrow(/deploy.qa is required/);
   });
   it("rejects an unknown thinking level", () => {

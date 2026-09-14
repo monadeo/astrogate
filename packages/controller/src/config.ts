@@ -4,7 +4,7 @@ import type { Paths } from "./paths.js";
 
 export type Tier = "critical" | "non-critical";
 
-export interface ProjectConfig {
+export interface RepoConfig {
   repo: string;
   tier: Tier;
   checkScript: string;
@@ -16,7 +16,7 @@ export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhi
 export interface Config {
   github: { org: string; owner: string; appId: number; appSlug: string; installationId: number; projectNumber: number };
   listen: { host: string; port: number; path: string };
-  projects: ProjectConfig[];
+  repos: RepoConfig[];
   concurrency: { workers: number };
   attemptCap: number;
   reminders: { afterMinutes: number };
@@ -64,8 +64,8 @@ function section(obj: Record<string, unknown>, key: string): Record<string, unkn
   return v;
 }
 
-function parseProject(value: unknown, index: number): ProjectConfig {
-  const where = `projects[${index}]`;
+function parseRepo(value: unknown, index: number): RepoConfig {
+  const where = `repos[${index}]`;
   if (!isRecord(value)) throw new ConfigError(`${where} must be an object`);
   const repo = str(value, "repo", where);
   if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) throw new ConfigError(`${where}.repo must be owner/name`);
@@ -102,8 +102,8 @@ export function parseConfig(raw: unknown): Config {
   const concurrency = section(raw, "concurrency");
   const reminders = section(raw, "reminders");
   const worker = section(raw, "worker");
-  const projects = raw["projects"];
-  if (!Array.isArray(projects)) throw new ConfigError("projects must be an array");
+  const repos = raw["repos"];
+  if (!Array.isArray(repos)) throw new ConfigError("repos must be an array");
   return {
     github: {
       org: str(github, "org", "github"),
@@ -114,7 +114,7 @@ export function parseConfig(raw: unknown): Config {
       projectNumber: num(github, "projectNumber", "github"),
     },
     listen: { host: str(listen, "host", "listen"), port: num(listen, "port", "listen"), path: str(listen, "path", "listen") },
-    projects: projects.map(parseProject),
+    repos: repos.map(parseRepo),
     concurrency: { workers: num(concurrency, "workers", "concurrency") },
     attemptCap: num(raw, "attemptCap", "config"),
     reminders: { afterMinutes: num(reminders, "afterMinutes", "reminders") },
@@ -123,8 +123,8 @@ export function parseConfig(raw: unknown): Config {
   };
 }
 
-export function findProject(config: Config, repo: string): ProjectConfig | undefined {
-  return config.projects.find((p) => p.repo.toLowerCase() === repo.toLowerCase());
+export function findRepo(config: Config, repo: string): RepoConfig | undefined {
+  return config.repos.find((p) => p.repo.toLowerCase() === repo.toLowerCase());
 }
 
 export function loadConfig(paths: Paths): Config {

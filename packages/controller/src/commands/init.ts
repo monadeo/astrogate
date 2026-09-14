@@ -72,7 +72,7 @@ export function writeInitialConfig(paths: Paths, org: string, appId: number, app
   const config = {
     github: { org, owner: "", appId, appSlug, installationId: 0, projectNumber: 0 },
     listen: { host: "127.0.0.1", port: listenPort, path: webhookPath },
-    projects: [],
+    repos: [],
     concurrency: { workers: 2 },
     attemptCap: 3,
     reminders: { afterMinutes: 240 },

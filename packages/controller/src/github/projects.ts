@@ -1,5 +1,39 @@
 import type { GitHubApp } from "./client.js";
-import { isStatus, type Status } from "../flow/status.js";
+import { ALL_STATUSES, isStatus, type Status } from "../flow/status.js";
+
+const STATUS_COLORS: Record<Status, string> = {
+  Inbox: "GRAY",
+  Ready: "BLUE",
+  "In progress": "YELLOW",
+  Review: "ORANGE",
+  QA: "PURPLE",
+  "Ready for acceptance": "PINK",
+  Done: "GREEN",
+  "Needs Astro": "RED",
+  Blocked: "RED",
+};
+
+/** Creates the board with the Status options Astrogate drives, returns its number. */
+export async function createBoard(github: GitHubApp, org: string, title: string): Promise<number> {
+  const owner = await github.graphql<{ organization: { id: string } }>(`query($org: String!) { organization(login: $org) { id } }`, { org });
+  const created = await github.graphql<{ createProjectV2: { projectV2: { id: string; number: number; field: { id: string } | null } } }>(
+    `mutation($owner: ID!, $title: String!) {
+      createProjectV2(input: { ownerId: $owner, title: $title }) {
+        projectV2 { id number field(name: "Status") { ... on ProjectV2SingleSelectField { id } } }
+      }
+    }`,
+    { owner: owner.organization.id, title },
+  );
+  const project = created.createProjectV2.projectV2;
+  if (!project.field) throw new Error("new project has no Status field");
+  await github.graphql(
+    `mutation($field: ID!, $options: [ProjectV2SingleSelectFieldOptionInput!]!) {
+      updateProjectV2Field(input: { fieldId: $field, singleSelectOptions: $options }) { projectV2Field { ... on ProjectV2SingleSelectField { id } } }
+    }`,
+    { field: project.field.id, options: ALL_STATUSES.map((name) => ({ name, color: STATUS_COLORS[name], description: "" })) },
+  );
+  return project.number;
+}
 
 export interface BoardItem {
   itemId: string;

@@ -1,8 +1,7 @@
 name: release
 
 on:
-  push:
-    tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -29,6 +28,7 @@ jobs:
       - name: Pack release tarball
         id: pack
         run: |
+          case "$GITHUB_REF" in refs/tags/v*) ;; *) echo "::error::Run this workflow from a version tag (--ref vX.Y.Z)."; exit 1;; esac
           VERSION="${GITHUB_REF_NAME#v}"
           PKG_VERSION=$(node -p "require('./package.json').version")
           if [ "$VERSION" != "$PKG_VERSION" ]; then

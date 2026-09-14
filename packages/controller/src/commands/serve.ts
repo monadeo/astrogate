@@ -27,7 +27,7 @@ export async function serve(paths: Paths): Promise<void> {
 
   const app = await github.request<{ slug: string }>("GET", "/app", undefined, github.appJwt());
   await board.load();
-  log("serve", `authenticated as GitHub App ${app.slug}`, { board: board.url, projects: config.projects.map((p) => p.repo) });
+  log("serve", `authenticated as GitHub App ${app.slug}`, { board: board.url, repos: config.repos.map((p) => p.repo) });
 
   const holder: { engine?: Engine } = {};
   const sessions = new SessionServer(paths.socket, {

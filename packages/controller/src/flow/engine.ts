@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { HandlerResult, Role, SessionMessage, TaskEnvelope, ToolCall } from "@monadeo.com/astrogate-protocol";
-import { findProject, type Config, type ProjectConfig } from "../config.js";
+import { findRepo, type Config, type RepoConfig } from "../config.js";
 import { DiscordNotifier } from "../discord/notifier.js";
 import type { GitHubApp } from "../github/client.js";
 import type { BoardItem, ProjectBoard } from "../github/projects.js";
@@ -272,7 +272,7 @@ export class Engine {
     session.send({ kind: "task", envelope: this.#envelope(project, worker.ticket, attempt, worker.branch, worker.worktree, brief) });
   }
 
-  #envelope(project: ProjectConfig, ticket: number, attempt: number, branch: string, worktree: string, brief: string): TaskEnvelope {
+  #envelope(project: RepoConfig, ticket: number, attempt: number, branch: string, worktree: string, brief: string): TaskEnvelope {
     return { ticket, attempt, repo: project.repo, branch, worktree, brief, checks: [project.checkScript] };
   }
 
@@ -430,7 +430,7 @@ export class Engine {
     }
   }
 
-  async #onQaResult(project: ProjectConfig, conclusion: string, url: string): Promise<void> {
+  async #onQaResult(project: RepoConfig, conclusion: string, url: string): Promise<void> {
     const members = this.#d.db.members(project.repo).filter((m) => m.state === "qa");
     if (members.length === 0) return;
     const list = members.map((m) => `#${m.ticket}`).join(", ");
@@ -449,7 +449,7 @@ export class Engine {
     await this.#alert(`QA deploy of ${project.repo} failed (${conclusion}): ${list}\n${url}`);
   }
 
-  async #onProductionResult(project: ProjectConfig, conclusion: string, url: string): Promise<void> {
+  async #onProductionResult(project: RepoConfig, conclusion: string, url: string): Promise<void> {
     const members = this.#d.db.members(project.repo);
     const shipping = members.filter((m) => m.state === "shipping");
     const direct = members.filter((m) => m.state === "prod");
@@ -524,7 +524,7 @@ export class Engine {
     await this.startWorker(item, text);
   }
 
-  async #ensureReleaseBranch(project: ProjectConfig, defaultBranch: string): Promise<string> {
+  async #ensureReleaseBranch(project: RepoConfig, defaultBranch: string): Promise<string> {
     if (!(await this.#d.repos.branchExists(project.repo, RELEASE_BRANCH))) {
       await this.#d.repos.createBranch(project.repo, RELEASE_BRANCH, await this.#d.repos.branchSha(project.repo, defaultBranch));
     }
@@ -533,16 +533,16 @@ export class Engine {
 
   // ---------- helpers ----------
 
-  #project(repo: string): ProjectConfig | undefined {
-    return findProject(this.#d.config, repo);
+  #project(repo: string): RepoConfig | undefined {
+    return findRepo(this.#d.config, repo);
   }
 
-  async #clone(project: ProjectConfig): Promise<string> {
+  async #clone(project: RepoConfig): Promise<string> {
     const token = await this.#d.github.installationToken({ repositories: [project.repo.split("/")[1] ?? ""], permissions: { contents: "read" } });
     return ensureClone(this.#d.config.worker.reposDir, project.repo, await this.#defaultBranch(project), token);
   }
 
-  async #defaultBranch(project: ProjectConfig): Promise<string> {
+  async #defaultBranch(project: RepoConfig): Promise<string> {
     const cached = this.#defaultBranches.get(project.repo);
     if (cached) return cached;
     const branch = await this.#d.repos.defaultBranch(project.repo);

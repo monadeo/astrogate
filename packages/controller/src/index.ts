@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { exchangeManifestCode, manifestFormHtml, writeAppSecrets, writeInitialConfig } from "./commands/init.js";
 import { serve } from "./commands/serve.js";
+import { initBoard } from "./commands/board.js";
 import { status } from "./commands/status.js";
 import { ConfigError } from "./config.js";
 import { helpText } from "./help.js";
@@ -31,7 +32,7 @@ async function initApp(args: string[]): Promise<void> {
     if (!values.org) throw new ConfigError("--org is required together with --code");
     writeInitialConfig(paths, values.org, conversion.id, conversion.slug, port, "/webhook");
     console.log(`App ${conversion.slug} (id ${conversion.id}) registered. Secrets in ${paths.secrets}.`);
-    console.log(`Install the app on ${values.org}, then set github.installationId, projects, and worker.worktreesDir in ${paths.config}.`);
+    console.log(`Install the app on ${values.org}, then set github.owner, github.installationId, github.projectNumber, repos, and worker paths in ${paths.config}.`);
     return;
   }
   if (!values.org || !values["webhook-url"]) throw new ConfigError("init app needs --org and --webhook-url, or --code");
@@ -56,8 +57,9 @@ async function main(argv: string[]): Promise<void> {
       console.log(helpText(__ASTROGATE_VERSION__));
       return;
     case "init":
-      if (rest[0] !== "app") throw new ConfigError("usage: astrogate init app ...");
-      await initApp(rest.slice(1));
+      if (rest[0] === "app") await initApp(rest.slice(1));
+      else if (rest[0] === "board") await initBoard(resolvePaths(), rest.slice(1));
+      else throw new ConfigError("usage: astrogate init app|board ...");
       return;
     case "serve":
       await serve(resolvePaths());
